@@ -1,4 +1,12 @@
 
-# Before start
+# Installation
 
-Copy `_config.json` file as `config.json` and set values according to your preferences
+`npm install`
+
+# Configuration
+
+Copy `src/config_EXAMPLE.json` file as `src/config.json` and set values according to your preferences.
+
+# Launch
+
+`npm start`
