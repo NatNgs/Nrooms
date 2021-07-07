@@ -9,4 +9,6 @@ Copy `src/config_EXAMPLE.json` file as `src/config.json` and set values accordin
 
 # Launch
 
-`npm start`
+`npm start` to start the app once
+
+`node-dev src/server.js` will automatically restart the app after any code change

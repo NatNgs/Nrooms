@@ -1,12 +1,14 @@
-const app = require('express')()
 const os = require('os')
-const server = require('http').Server(app)
-const io = require('socket.io').listen(server)
 const config = require('./config.json')
+const app = require('express')()
+const server = require('http').createServer(app)
+const cors = require('cors')
+app.use(cors())
+const io = require('socket.io')(server)
+const minifier = require('./minifier')
 
 function serverStart() {
 	io.sockets.on('connection', onConnect)
-	server.listen(config.serverPort)
 
 	// Listing IP and ports available for connexion (LAN)
 	console.info('Server open on:')
@@ -14,7 +16,36 @@ function serverStart() {
 		('IPv4' === iface.family) && console.info('\t' + iface.address + ':' + config.serverPort)
 	))
 	console.info() // Newline
+
+	server.listen(config.serverPort)
 }
+
+app.get('/', (req, res, nxt) => {
+	res.redirect(config.defaultHttpFolder)
+})
+app.get('/:httpFolder([A-z0-9_]+)', (req, res) => res.redirect(req.url + '/index.html'))
+app.get('/:httpFolder([A-z0-9_]+)/', (req, res) => res.redirect(req.url + 'index.html'))
+app.get(/^(\/[A-Za-z0-9_]+)+\.[A-Za-z0-9_.]+$/, (req, res, nxt) => {
+	const folder = req.originalUrl.split('/')[1]
+	const file = req.originalUrl.slice(folder.length+2)
+
+	if(!config.httpFolders[folder]) {
+		nxt()
+		return
+	}
+	minifier.getFileAsync(
+		config.httpFolders[folder] + '/' + file,
+		(f) => {
+			console.debug('200: ' + req.originalUrl + ' ('+ f + ')')
+			res.sendFile(f)
+		},
+		nxt
+	)
+})
+app.get('*', (req, res) => {
+	console.warn('404: ' + req.originalUrl)
+	res.status(404).send('404: Not Found')
+})
 
 // io.emit('cmd', data) // broadcast
 // socket.emit('cmd', data) // send command to specific
@@ -26,7 +57,7 @@ const players = {} // clientId: {socket: <>, rooms: [roomId1, roomId2, ...]}
 function onConnect(socket) {
 	const connectBy = socket.handshake.headers.host
 
-	const clientId = connectBy // TODO: hide
+	const clientId = socket.id
 	players[clientId] = {socket: socket, rooms: []}
 
 	console.log('Player', clientId, 'connected from', connectBy)
@@ -51,7 +82,7 @@ function onConnect(socket) {
 			rooms[params.room] = {host:[], all:[], admin:[]}
 			const roles = addPlayerRoles(params.room, clientId, ['admin', 'host', 'all'])
 			roles.forEach((role) => socket.join(params.room + '/' + role))
-			io.to(params.room + '/all').emit({room: params.room, connected: clientId, roles: roles})
+			io.to(params.room + '/all').emit('connected', {room: params.room, player: clientId, roles: roles})
 			response.status(200).emit()
 		}
 	})
@@ -67,7 +98,7 @@ function onConnect(socket) {
 		} else {
 			const roles = addPlayerRoles(params.room, clientId, ['all'])
 			getPlayerRoles(params.room, clientId).forEach((role) => socket.join(params.room + '/' + role))
-			io.to(params.room + '/all').emit({room: params.room, connected: clientId, roles: roles})
+			io.to(params.room + '/all').emit('connected', {room: params.room, player: clientId, roles: roles})
 			response.status(200).emit()
 		}
 	})
@@ -106,7 +137,7 @@ function onConnect(socket) {
 		} else {
 			const newRoles = addPlayerRoles(params.room, params.player, params.roles)
 			newRoles.forEach((role) => players[params.player].socket.join(params.room + '/' + role))
-			io.to(params.room + '/all').emit({room: params.room, connected: params.player, roles: newRoles})
+			io.to(params.room + '/all').emit('connected', {room: params.room, player: params.player, roles: newRoles})
 			response.status(200).emit()
 		}
 	})
@@ -132,7 +163,7 @@ function onConnect(socket) {
 			getPlayerRoles(params.room, params.player).forEach((role) => pSocket.leave(params.room + '/' + role))
 			const newRoles = rmPlayerRoles(params.room, params.player, params.roles)
 			newRoles.forEach((role) => pSocket.join(params.room + '/' + role))
-			io.to(params.room + '/all').emit({room: params.room, connected: params.player, roles: newRoles})
+			io.to(params.room + '/all').emit('connected', {room: params.room, connected: params.player, roles: newRoles})
 			response.status(200).emit()
 		}
 	})
@@ -140,8 +171,10 @@ function onConnect(socket) {
 	/**
 	 * room: str
 	 * to: str (role)
-	 * cmd: str (command code) Note: will be prefixed by 'client/'
+	 * cmd: str (command code)
 	 * content: <any>
+	 *
+	 * Will send to all users having the 'to' role in the room, command id "<to>/<cmd>" with given content
 	 */
 	socket.on('comm', (params, response) => {
 		if(!(params.room in rooms)) {
@@ -151,7 +184,7 @@ function onConnect(socket) {
 		} else if(!(params.to in rooms[params.room])) {
 			response.status(400).emit({err: 'Role \'' + params.to + '\' does not exists'})
 		} else {
-			io.to(params.room + '/' + params.to).emit('client/' + params.cmd, params.content)
+			io.to(params.room + '/' + params.to).emit(params.to + '/' + params.cmd, params.content)
 			response.status(200).emit()
 		}
 	})
@@ -162,7 +195,7 @@ function onConnect(socket) {
 
 function leaveRoom(roomId, clientId) {
 	rmPlayerRoles(roomId, clientId, getPlayerRoles(roomId, clientId))
-	io.to(roomId + '/all').emit({room: roomId, disconnected: clientId})
+	io.to(roomId + '/all').emit('disconnected', {room: roomId, disconnected: clientId})
 	const roomRoles = rooms[roomId]
 
 	if(roomRoles.all.length <= 0) { // No more user: Room is closed
