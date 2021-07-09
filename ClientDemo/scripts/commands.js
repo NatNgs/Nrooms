@@ -10,7 +10,7 @@ function init() {
 	 * roles: [role1, ...] (roles of the player)
 	 */
 	$.socket.on('connected', (data) => {
-		// TODO
+		console.log('connected', data)
 	})
 
 	/**
@@ -19,26 +19,49 @@ function init() {
 	 * roles: [role1, ...] (roles of the player)
 	 */
 	$.socket.on('disconnected', (data) => {
-		// TODO
+		console.log('disconnected', data)
 	})
 
 
 	// // // Game specific commands
 
-	$.socket.on('all/msg', (data) => {
-		console.log('Received message: ' + data.msg)
+	$.socket.on('*/msg', (data) => {
+		console.log('all/msg', data)
 	})
 }
 $(document).ready(init)
 
 // socket.emit('cmd', data) to send a command to server
 
-function connectToRoom(roomId) {
+function createRoom(roomId) {
+	$.socket.emit('create', {
+		room: roomId
+	}, console.log)
+}
+function joinRoom(roomId) {
 	$.socket.emit('join', {
 		room: roomId
-	}, (confirmation) => {
-		console.log('Joined ' + roomId, confirmation)
-	})
+	}, console.log)
 }
-
+function leaveRoom(roomId) {
+	$.socket.emit('leave', {
+		room: roomId
+	}, console.log)
+}
+function sendGroupMsg(room, group, message) {
+	$.socket.emit('comm', {
+		room: room,
+		to: group,
+		cmd: 'msg',
+		content: {msg: message}
+	}, console.log)
+}
+function sendPrivateMsg(room, playerId, message) {
+	$.socket.emit('tell', {
+		room: room,
+		to: playerId,
+		cmd: 'msg',
+		content: {msg: message}
+	}, console.log)
+}
 

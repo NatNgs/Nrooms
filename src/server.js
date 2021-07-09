@@ -3,7 +3,9 @@ const config = require('./config.json')
 const app = require('express')()
 const server = require('http').createServer(app)
 const cors = require('cors')
+const compression = require('compression')
 app.use(cors())
+app.use(compression())
 const io = require('socket.io')(server)
 const minifier = require('./minifier')
 
@@ -35,8 +37,9 @@ app.get(/^(\/[A-Za-z0-9_]+)+\.[A-Za-z0-9_.]+$/, (req, res, nxt) => {
 	}
 	minifier.getFileAsync(
 		config.httpFolders[folder] + '/' + file,
+		folder + '/' + file,
 		(f) => {
-			console.debug('200: ' + req.originalUrl + ' ('+ f + ')')
+			console.debug('200: ' + req.originalUrl)
 			res.sendFile(f)
 		},
 		nxt
@@ -60,6 +63,7 @@ function onConnect(socket) {
 	const clientId = socket.id
 	players[clientId] = {socket: socket, rooms: []}
 
+
 	console.log('Player', clientId, 'connected from', connectBy)
 	socket.on('disconnect', () => {
 		console.log('Client', clientId, 'has been disconnected from', connectBy)
@@ -75,15 +79,15 @@ function onConnect(socket) {
 	 */
 	socket.on('create', (params, response) => {
 		if(!params.room.match(/^[A-Za-z0-9_]{4,12}$/)) {
-			response.status(400).emit({err: 'Invalid room Id (\'' + params.room + '\' does not respect [A-Za-z0-9_]{4,12})'})
+			response({status: 'ko', err: 'Invalid room Id (\'' + params.room + '\' does not respect [A-Za-z0-9_]{4,12})'})
 		} else if(params.room in rooms) {
-			response.status(400).emit({err: 'Room \'' + params.room + '\' already exists'})
+			response({status: 'ko', err: 'Room \'' + params.room + '\' already exists'})
 		} else {
-			rooms[params.room] = {host:[], all:[], admin:[]}
-			const roles = addPlayerRoles(params.room, clientId, ['admin', 'host', 'all'])
+			rooms[params.room] = {host:[clientId], all:[], admin:[]}
+			const roles = addPlayerRoles(params.room, clientId, ['admin', 'all'])
 			roles.forEach((role) => socket.join(params.room + '/' + role))
-			io.to(params.room + '/all').emit('connected', {room: params.room, player: clientId, roles: roles})
-			response.status(200).emit()
+			io.to(params.room + '/all').emit('connected', {player: clientId, room: getRoomDescription(params.room)})
+			response({status: 'ok'})
 		}
 	})
 
@@ -92,14 +96,15 @@ function onConnect(socket) {
 	 */
 	socket.on('join', (params, response) => {
 		if(!(params.room in rooms)) {
-			response.status(400).emit({err: 'Room \'' + params.room + '\' does not exists'})
+			response({status: 'ko', err: 'Room \'' + params.room + '\' does not exists'})
 		} else if(players[clientId].rooms.indexOf(params.room) >= 0) {
-			response.status(400).emit({err: 'Already joined the room'})
+			response({status: 'ko', err: 'Already joined the room'})
 		} else {
+			players[clientId].rooms.push(params.room)
 			const roles = addPlayerRoles(params.room, clientId, ['all'])
-			getPlayerRoles(params.room, clientId).forEach((role) => socket.join(params.room + '/' + role))
-			io.to(params.room + '/all').emit('connected', {room: params.room, player: clientId, roles: roles})
-			response.status(200).emit()
+			roles.forEach((role) => socket.join(params.room + '/' + role))
+			io.to(params.room + '/all').emit('connected', {player: clientId, room: getRoomDescription(params.room)})
+			response({status: 'ok'})
 		}
 	})
 
@@ -107,14 +112,12 @@ function onConnect(socket) {
 	 * room: str
 	 */
 	socket.on('leave', (params, response) => {
-		if(!(params.room in rooms)) {
-			response.status(400).emit({err: 'Room \'' + params.room + '\' does not exists'})
-		} else if(players[clientId].rooms.indexOf(params.room) < 0) {
-			response.status(403).emit({err: 'You are not a member of this room'})
+		if(!(params.room in rooms) || players[clientId].rooms.indexOf(params.room) < 0) {
+			response({status: 'ko', err: 'You are not a member of this room'})
 		} else {
 			getPlayerRoles(params.room, clientId).forEach((role) => socket.leave(params.room + '/' + role))
 			leaveRoom(params.room, clientId)
-			response.status(200).emit()
+			response({status: 'ok'})
 		}
 	})
 
@@ -124,21 +127,17 @@ function onConnect(socket) {
 	 * roles: [role1, role2, ...]
 	 */
 	socket.on('addRoles', (params, response) => {
-		if(!(params.room in rooms)) {
-			response.status(400).emit({err: 'Room \'' + params.room + '\' does not exists'})
-		} else if(players[clientId].rooms.indexOf(params.room) < 0) {
-			response.status(403).emit({err: 'You are not a member of this room'})
+		if(!(params.room in rooms) || players[clientId].rooms.indexOf(params.room) < 0) {
+			response({status: 'ko', err: 'You are not a member of this room'})
 		} else if(rooms[params.room].host[0] !== clientId && rooms[params.room].admin.indexOf(clientId) >= 0) {
 			response.status(401).send({err: 'Admin role required'})
-		} else if(!(params.player in players)) {
-			response.status(400).emit({err: 'Player \'' + params.player + '\' does not exists'})
-		} else if(players[params.player].rooms.indexOf(params.room) < 0) {
-			response.status(400).emit({err: 'Player \'' + params.player + '\' is not in room \'' + params.room + '\''})
+		} else if(!(params.player in players) || players[params.player].rooms.indexOf(params.room) < 0) {
+			response({status: 'ko', err: 'Player \'' + params.player + '\' is not in room \'' + params.room + '\''})
 		} else {
 			const newRoles = addPlayerRoles(params.room, params.player, params.roles)
 			newRoles.forEach((role) => players[params.player].socket.join(params.room + '/' + role))
-			io.to(params.room + '/all').emit('connected', {room: params.room, player: params.player, roles: newRoles})
-			response.status(200).emit()
+			io.to(params.room + '/all').emit('connected', {player: clientId, room: getRoomDescription(params.room)})
+			response({status: 'ok'})
 		}
 	})
 
@@ -148,23 +147,38 @@ function onConnect(socket) {
 	 * roles: [role1, role2, ...]
 	 */
 	socket.on('rmRoles', (params, response) => {
-		if(!(params.room in rooms)) {
-			response.status(400).emit({err: 'Room \'' + params.room + '\' does not exists'})
-		} else if(players[clientId].rooms.indexOf(params.room) < 0) {
-			response.status(403).emit({err: 'You are not a member of this room'})
+		if(!(params.room in rooms) || players[clientId].rooms.indexOf(params.room) < 0) {
+			response({status: 'ko', err: 'You are not a member of this room'})
 		} else if(rooms[params.room].host[0] !== clientId && rooms[params.room].admin.indexOf(clientId) >= 0) {
 			response.status(401).send({err: 'Admin role required'})
-		} else if(!(params.player in players)) {
-			response.status(400).emit({err: 'Player \'' + params.player + '\' does not exists'})
-		} else if(players[params.player].rooms.indexOf(params.room) < 0) {
-			response.status(400).emit({err: 'Player \'' + params.player + '\' is not in room \'' + params.room + '\''})
+		} else if(!(params.player in players) || players[params.player].rooms.indexOf(params.room) < 0) {
+			response({status: 'ko', err: 'Player \'' + params.player + '\' is not in room \'' + params.room + '\''})
 		} else {
 			const pSocket = players[params.player].socket
 			getPlayerRoles(params.room, params.player).forEach((role) => pSocket.leave(params.room + '/' + role))
 			const newRoles = rmPlayerRoles(params.room, params.player, params.roles)
 			newRoles.forEach((role) => pSocket.join(params.room + '/' + role))
-			io.to(params.room + '/all').emit('connected', {room: params.room, connected: params.player, roles: newRoles})
-			response.status(200).emit()
+			io.to(params.room + '/all').emit('connected', {player: clientId, room: getRoomDescription(params.room)})
+			response({status: 'ok'})
+		}
+	})
+
+	/**
+	 * room: str
+	 * to: str (playerId)
+	 * cmd: str (command code)
+	 * content: <any>
+	 *
+	 * Will send to specified user, command id "private/<cmd>" with given content
+	 */
+	socket.on('tell', (params, response) => {
+		if(!(params.room in rooms) || players[clientId].rooms.indexOf(params.room) < 0) {
+			response({status: 'ko', err: 'You are not a member of this room'})
+		} else if(!(params.to in players) || players[params.to].rooms.indexOf(params.room) < 0) {
+			response({status: 'ko', err: 'Cannot find player \'' + params.to + '\' in room \'' + params.room + '\''})
+		} else {
+			players[params.to].socket.emit('private/' + params.cmd, params.content)
+			response({status: 'ok'})
 		}
 	})
 
@@ -177,15 +191,13 @@ function onConnect(socket) {
 	 * Will send to all users having the 'to' role in the room, command id "<to>/<cmd>" with given content
 	 */
 	socket.on('comm', (params, response) => {
-		if(!(params.room in rooms)) {
-			response.status(400).emit({err: 'Room \'' + params.room + '\' does not exists'})
-		} else if(players[clientId].rooms.indexOf(params.room) < 0) {
-			response.status(403).emit({err: 'You are not a member of this room'})
+		if(!(params.room in rooms) || players[clientId].rooms.indexOf(params.room) < 0) {
+			response({status: 'ko', err: 'You are not a member of room \'' + params.room + '\''})
 		} else if(!(params.to in rooms[params.room])) {
-			response.status(400).emit({err: 'Role \'' + params.to + '\' does not exists'})
+			response({status: 'ko', err: 'Role \'' + params.to + '\' does not exists'})
 		} else {
 			io.to(params.room + '/' + params.to).emit(params.to + '/' + params.cmd, params.content)
-			response.status(200).emit()
+			response({status: 'ok'})
 		}
 	})
 }
@@ -243,6 +255,14 @@ function rmPlayerRoles(roomId, clientId, rmRoles) {
 		}
 	}
 	return getPlayerRoles(roomId, clientId)
+}
+
+function getRoomDescription(roomId) {
+	const desc = {
+		room: roomId,
+		players: rooms[roomId]
+	}
+	return desc
 }
 
 // Starting the server
