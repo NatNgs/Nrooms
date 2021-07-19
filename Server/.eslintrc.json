@@ -1,16 +1,16 @@
 {
 	/* https://eslint.org/docs/user-guide/configuring */
+	"root": true,
 	"extends": "eslint:recommended",
 	"env": {
-		"node": true,
-		"es6": true,
-		"browser": false,
-		"jquery": false
+		"node": true
 	},
 	"parserOptions": {
-		"ecmaVersion": 6,
-		"sourceType": "module"
+		"ecmaVersion": "latest",
+		"sourceType": "module",
+		"impliedStrict": true
 	},
+	"ignorePatterns": ["**/*.min.*"],
 	"rules": {
 		/* https://eslint.org/docs/rules/ */
 		"arrow-parens": ["warn", "always"],

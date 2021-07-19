@@ -9,6 +9,8 @@ app.use(compression())
 const io = require('socket.io')(server)
 const minifier = require('./minifier')
 
+const ROOM_CODE_FORMAT = /^[A-Za-z0-9_]{4,12}$/
+
 function serverStart() {
 	io.sockets.on('connection', onConnect)
 
@@ -28,22 +30,28 @@ app.get('/', (req, res, nxt) => {
 app.get('/:httpFolder([A-z0-9_]+)', (req, res) => res.redirect(req.url + '/index.html'))
 app.get('/:httpFolder([A-z0-9_]+)/', (req, res) => res.redirect(req.url + 'index.html'))
 app.get(/^(\/[A-Za-z0-9_]+)+\.[A-Za-z0-9_.]+$/, (req, res, nxt) => {
-	const folder = req.originalUrl.split('/')[1]
-	const file = req.originalUrl.slice(folder.length+2)
+	let folder = req.originalUrl.split('/')[1]
+	let file = req.originalUrl.slice(folder.length+2)
+
+	if(file.startsWith('common')) {
+		folder = 'common'
+		file = file.slice(folder.length+1)
+	}
 
 	if(!config.httpFolders[folder]) {
 		nxt()
 		return
+	} else {
+		minifier.getFileAsync(
+			config.httpFolders[folder] + '/' + file,
+			folder + '/' + file,
+			(f) => {
+				console.debug('200: ' + req.originalUrl)
+				res.sendFile(f)
+			},
+			nxt
+		)
 	}
-	minifier.getFileAsync(
-		config.httpFolders[folder] + '/' + file,
-		folder + '/' + file,
-		(f) => {
-			console.debug('200: ' + req.originalUrl)
-			res.sendFile(f)
-		},
-		nxt
-	)
 })
 app.get('*', (req, res) => {
 	console.warn('404: ' + req.originalUrl)
@@ -78,7 +86,7 @@ function onConnect(socket) {
 	 * room: str
 	 */
 	socket.on('create', (params, response) => {
-		if(!params.room.match(/^[A-Za-z0-9_]{4,12}$/)) {
+		if(!params.room.match(ROOM_CODE_FORMAT)) {
 			response({status: 'ko', err: 'Invalid room Id (\'' + params.room + '\' does not respect [A-Za-z0-9_]{4,12})'})
 		} else if(params.room in rooms) {
 			response({status: 'ko', err: 'Room \'' + params.room + '\' already exists'})
@@ -198,6 +206,21 @@ function onConnect(socket) {
 		} else {
 			io.to(params.room + '/' + params.to).emit(params.to + '/' + params.cmd, params.content)
 			response({status: 'ok'})
+		}
+	})
+
+	/**
+	 * room: str
+	 *
+	 * Get information about a room
+	 */
+	socket.on('info', (params, response) => {
+		if(!params.room || !ROOM_CODE_FORMAT.test(params.room)) {
+			response({status: 'ko', err: 'Wrong room id \'' + params.room + '\''})
+		} else if(params.room in rooms) {
+			response({status: 'ok', room: rooms[params.room]})
+		} else {
+			response({status: 'ok', room: null})
 		}
 	})
 }

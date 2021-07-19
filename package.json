@@ -23,9 +23,9 @@
 		"eslint": "^7.30.0",
 		"node-dev": "^7.0.0"
 	},
-	"main": "src/server.js",
+	"main": "Server/server.js",
 	"scripts": {
-		"start": "node src/server.js",
+		"start": "node Server/server.js",
 		"test": "echo \"Error: no test specified\" && exit 1"
 	}
 }

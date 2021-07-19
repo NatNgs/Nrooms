@@ -9,12 +9,19 @@
 
 
 	<!-- Internal -->
-	<script src="scripts/socket.io.min.js"></script> <!-- from https://cdn.socket.io/4.1.2/socket.io.min.js -->
+	<script src="common/scripts/socket.io.min.js"></script>
 	<script src="scripts/commands.js"></script>
 	<script src="scripts/main.js"></script>
 	<link rel="stylesheet" type="text/css" href="styles/main.css">
 </head>
-<body>
-
+<body onload="onLoad()">
+	Room: <input id="nroom" minlength="4" maxlength="12" onKeyUp="roomInput()"/>
+	<hr/>
+	Rejoindre la room existante: <button id="goJoin" disabled="true">Go</button>
+	<hr/>
+	Créer une Room:
+	<ul id="goNew">
+		<li><button name="game">Deminator</button></li>
+	</ul>
 </body>
 </html>

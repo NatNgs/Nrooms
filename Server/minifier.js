@@ -13,34 +13,37 @@ const projectBase = path.join(__dirname, '..')
 const tmpFolder = 'tmp'
 fs.rmdirSync(tmpFolder, { recursive: true })
 
+const notMinified = []
+
 module.exports = {
 	setDebug: (isDebug) => debugMode = isDebug,
 	getFileAsync: (originalFilePath, minifiedFilePath, cbSuccess, cbError) => {
 		originalFilePath = path.join(projectBase, originalFilePath)
+
+		if(debugMode || /\.min\./.test(originalFilePath) || notMinified.indexOf(originalFilePath) >= 0) {
+			return cbSuccess(originalFilePath)
+		}
+
 		minifiedFilePath = path.join(projectBase, tmpFolder, minifiedFilePath)
 		// look for file in tmp folder
 		fs.readFile(minifiedFilePath, (err, minifiedFileContent) => {
-			if(debugMode) {
-				return cbSuccess(originalFilePath)
-			} else if(minifiedFileContent) {
+			if(minifiedFileContent) {
 				return cbSuccess(minifiedFilePath)
 			}
 
-			console.log('Minifying ' + originalFilePath + '...')
 			fs.mkdir(path.dirname(minifiedFilePath), { recursive: true }, () => {
 				minify(originalFilePath, minifySettings).then((minifiedFileContent) => {
-					console.log('Minified ' + originalFilePath + ' to ' + minifiedFilePath)
-					fs.writeFile(minifiedFilePath, minifiedFileContent, (err) => cbSuccess(err?originalFilePath:minifiedFilePath))
+					fs.writeFile(minifiedFilePath, minifiedFileContent, (err) => {
+						if(err) {
+							notMinified.push(originalFilePath)
+							cbSuccess(originalFilePath)
+						} else {
+							cbSuccess(minifiedFilePath)
+						}
+					})
 				}, (err) => {
-					console.log('Cannot minify - Copied ' + originalFilePath + ' to ' + minifiedFilePath)
-					fs.readFile(
-						originalFilePath,
-						(err, originalFileContent) => fs.writeFile(
-							minifiedFilePath,
-							originalFileContent.toString(),
-							(err) => cbSuccess(err?originalFilePath:minifiedFilePath)
-						)
-					)
+					notMinified.push(originalFilePath)
+					cbSuccess(originalFilePath)
 				})
 			})
 		})

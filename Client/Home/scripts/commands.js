@@ -32,7 +32,6 @@ function init() {
 $(document).ready(init)
 
 // socket.emit('cmd', data) to send a command to server
-
 function createRoom(roomId) {
 	$.socket.emit('create', {
 		room: roomId
