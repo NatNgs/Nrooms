@@ -32,10 +32,11 @@ function init() {
 $(document).ready(init)
 
 // socket.emit('cmd', data) to send a command to server
-function createRoom(roomId) {
+function createRoom(roomId, roomType, cb) {
 	$.socket.emit('create', {
-		room: roomId
-	}, console.log)
+		room: roomId,
+		type: roomType
+	}, cb)
 }
 function joinRoom(roomId) {
 	$.socket.emit('join', {
@@ -64,3 +65,6 @@ function sendPrivateMsg(room, playerId, message) {
 	}, console.log)
 }
 
+function getRoomInfo() {
+	$.socket.emit('info', {}, console.log)
+}

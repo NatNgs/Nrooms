@@ -9,7 +9,9 @@ app.use(compression())
 const io = require('socket.io')(server)
 const minifier = require('./minifier')
 
-const ROOM_CODE_FORMAT = /^[A-Za-z0-9_]{4,12}$/
+const ACTIVITY_FORMAT = '[a-z0-9_]+'
+const ROOM_CODE_FORMAT = '[A-Z0-9-]{4,12}'
+const ROOM_CODE_REGEXP = new RegExp('^' + ROOM_CODE_FORMAT + '$')
 
 function serverStart() {
 	io.sockets.on('connection', onConnect)
@@ -24,22 +26,20 @@ function serverStart() {
 	server.listen(config.serverPort)
 }
 
-app.get('/', (req, res, nxt) => {
-	res.redirect(config.defaultHttpFolder)
-})
-app.get('/:httpFolder([A-z0-9_]+)', (req, res) => res.redirect(req.url + '/index.html'))
-app.get('/:httpFolder([A-z0-9_]+)/', (req, res) => res.redirect(req.url + 'index.html'))
-app.get(/^(\/[A-Za-z0-9_]+)+\.[A-Za-z0-9_.]+$/, (req, res, nxt) => {
-	let folder = req.originalUrl.split('/')[1]
-	let file = req.originalUrl.slice(folder.length+2)
+const rooms = {} // roomId: {role1: [player1, player2, ...], role2: [player1, player2, ...], ...}
+const players = {} // clientId: {socket: <>, rooms: [roomId1, roomId2, ...]}
 
+//
+// HTTP REQUESTS
+//
+function getFile(folder, file, req, res, onError) {
 	if(file.startsWith('common')) {
 		folder = 'common'
 		file = file.slice(folder.length+1)
 	}
 
 	if(!config.httpFolders[folder]) {
-		nxt()
+		onError()
 		return
 	} else {
 		minifier.getFileAsync(
@@ -49,22 +49,67 @@ app.get(/^(\/[A-Za-z0-9_]+)+\.[A-Za-z0-9_.]+$/, (req, res, nxt) => {
 				console.debug('200: ' + req.originalUrl)
 				res.sendFile(f)
 			},
-			nxt
+			onError
 		)
 	}
+}
+
+app.get('/', (req, res, nxt) => {
+	getFile(config.defaultHttpFolder, 'index.html', req, res, nxt)
+})
+app.get('/:room('+ ROOM_CODE_FORMAT +'$)', (req, res) => res.redirect(req.url + '/'))
+app.get('/:room('+ ROOM_CODE_FORMAT +')/', (req, res, nxt) => {
+	// Check if room exists
+	if(!(req.params.room in rooms)) return nxt()
+	const activity = rooms[req.params.room].activity
+
+	getFile(activity, 'index.html', req, res, nxt)
+})
+app.get('/:room('+ ROOM_CODE_FORMAT +')/*.*', (req, res, nxt) => {
+	// Check if room exists
+	if(!(req.params.room in rooms)) return nxt()
+
+	const splitted = req.originalUrl.split('/')
+	const baseURL = splitted.shift()
+	const room = splitted.shift()
+	const filePath = splitted.join('/')
+
+	let newURL = baseURL + '/'
+	if(!(filePath.startsWith(config.commonFolder + '/'))) {
+		const activity = rooms[room].activity
+		newURL += activity + '/'
+	}
+
+	newURL += filePath
+	// console.debug('Redirecting ' + req.originalUrl + ' to ' + newURL)
+	res.redirect(newURL)
+})
+app.get('/:activity('+ ACTIVITY_FORMAT +')/*.*', (req, res, nxt) => {
+	const splitted = req.originalUrl.split('/')
+	/* const baseURL = */ splitted.shift()
+	const activity = splitted.shift()
+	const file = splitted.join('/')
+	getFile(activity, file, req, res, nxt)
+})
+app.get('*.*', (req, res, nxt) => {
+	const splitted = req.originalUrl.split('/')
+	/* const baseURL = */ splitted.shift()
+	const file = splitted.join('/')
+	getFile(config.defaultHttpFolder, file, req, res, nxt)
 })
 app.get('*', (req, res) => {
 	console.warn('404: ' + req.originalUrl)
 	res.status(404).send('404: Not Found')
 })
 
+//
+// SOCKET
+//
 // io.emit('cmd', data) // broadcast
 // socket.emit('cmd', data) // send command to specific
 // io.to('roomName').emit('cmd', data) // send command to every socket in room
 // socket.join('roomName') // add socket to room
 // socket.leave('roomName') // remove socket from room
-const rooms = {} // roomId: {role1: [player1, player2, ...], role2: [player1, player2, ...], ...}
-const players = {} // clientId: {socket: <>, rooms: [roomId1, roomId2, ...]}
 function onConnect(socket) {
 	const connectBy = socket.handshake.headers.host
 
@@ -84,14 +129,17 @@ function onConnect(socket) {
 
 	/**
 	 * room: str
+	 * type: str
 	 */
 	socket.on('create', (params, response) => {
-		if(!params.room.match(ROOM_CODE_FORMAT)) {
+		if(!params.room.match(ROOM_CODE_REGEXP)) {
 			response({status: 'ko', err: 'Invalid room Id (\'' + params.room + '\' does not respect [A-Za-z0-9_]{4,12})'})
 		} else if(params.room in rooms) {
 			response({status: 'ko', err: 'Room \'' + params.room + '\' already exists'})
+		} else if(!(params.type in config.httpFolders)) {
+			response({status: 'ko', err: 'Type of room \'' + params.type + '\' does not exist'})
 		} else {
-			rooms[params.room] = {host:[clientId], all:[], admin:[]}
+			rooms[params.room] = {activity: params.type, host:[clientId], all:[], admin:[]}
 			const roles = addPlayerRoles(params.room, clientId, ['admin', 'all'])
 			roles.forEach((role) => socket.join(params.room + '/' + role))
 			io.to(params.room + '/all').emit('connected', {player: clientId, room: getRoomDescription(params.room)})
@@ -215,7 +263,7 @@ function onConnect(socket) {
 	 * Get information about a room
 	 */
 	socket.on('info', (params, response) => {
-		if(!params.room || !ROOM_CODE_FORMAT.test(params.room)) {
+		if(!params.room || !ROOM_CODE_REGEXP.test(params.room)) {
 			response({status: 'ko', err: 'Wrong room id \'' + params.room + '\''})
 		} else if(params.room in rooms) {
 			response({status: 'ok', room: rooms[params.room]})
@@ -233,8 +281,8 @@ function leaveRoom(roomId, clientId) {
 	io.to(roomId + '/all').emit('disconnected', {room: roomId, disconnected: clientId})
 	const roomRoles = rooms[roomId]
 
-	if(roomRoles.all.length <= 0) { // No more user: Room is closed
-		delete rooms[roomId]
+	if(roomRoles.all.length <= 0) { // No more user
+		// delete rooms[roomId]
 	} else if(roomRoles.host.length <= 0) { // No more host
 		let newHost = roomRoles.all[0]
 		if(roomRoles.admin.length) {

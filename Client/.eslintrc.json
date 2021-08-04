@@ -11,6 +11,9 @@
 		"sourceType": "script",
 		"impliedStrict": true
 	},
+	"ecmaFeatures": {
+		"globalReturn": false
+	},
 	"ignorePatterns": ["**/*.min.*"],
 	"rules": {
 		/* https://eslint.org/docs/rules/ */

@@ -4,6 +4,12 @@ config.json
 # Temporary files
 tmp/
 
+# Client programs (only let Home, common and Demin (as a demo))
+Client/*
+!Client/common/
+!Client/Home/
+!Client/Demin/
+
 # Windows
 **/desktop.ini
 
