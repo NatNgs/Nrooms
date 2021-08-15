@@ -1,70 +1,56 @@
 /* global io */
 
-function init() {
-	$.socket = io.connect('/')
+function Server(room = null) {
+	let socket
+	const defaultCb = (to,cmd,params, out) => console.info('Sent', to, cmd, params, out)
 
-	// Server specific commands
-	/**
-	 * room (room where the player has been connected)
-	 * player: str (id of the player)
-	 * roles: [role1, ...] (roles of the player)
-	 */
-	$.socket.on('connected', (data) => {
-		console.log('connected', data)
-	})
+	this.onReceivePrivate = function(cmd, fc) {
+		this.onReceiveGroup('private', cmd, fc)
+	}
+	this.onReceiveGroup = function(group, cmd, fc) {
+		this.onReceive((group||'*') + '/' + (cmd||'*'), fc)
+	}
 
-	/**
-	 * room (room where the player has been disconnected)
-	 * player: str (id of the player)
-	 * roles: [role1, ...] (roles of the player)
-	 */
-	$.socket.on('disconnected', (data) => {
-		console.log('disconnected', data)
-	})
+	this.onReceive = function(cmd, fc) {
+		console.log('Receiver registered for', cmd)
+		socket.on(cmd, (...args) => {
+			console.info('Received', cmd, args)
+			fc(...args)
+		})
+	}
 
+	//
+	// Send commands
+	//
+	this.send = function(cmd, parameters, cb) {
+		socket.emit(cmd, parameters, cb||((out) => defaultCb(null, cmd, parameters, out)))
+	}
+	this.sendGroup = function(group, cmd, parameters, cb) {
+		socket.emit('comm', {
+			room: room,
+			to: group,
+			cmd: cmd,
+			content: parameters
+		}, cb||((out) => defaultCb(group, cmd, parameters, out)))
+	}
+	this.sendPrivate = function(uid, cmd, parameters, cb) {
+		socket.emit('tell', {
+			room: room,
+			to: uid,
+			cmd: cmd,
+			content: parameters
+		}, cb||((out) => defaultCb(uid, cmd, parameters, out)))
+	}
 
-	// // // Game specific commands
-
-	$.socket.on('*/msg', (data) => {
-		console.log('all/msg', data)
-	})
-}
-$(document).ready(init)
-
-// socket.emit('cmd', data) to send a command to server
-function createRoom(roomId, roomType, cb) {
-	$.socket.emit('create', {
-		room: roomId,
-		type: roomType
-	}, cb)
-}
-function joinRoom(roomId) {
-	$.socket.emit('join', {
-		room: roomId
-	}, console.log)
-}
-function leaveRoom(roomId) {
-	$.socket.emit('leave', {
-		room: roomId
-	}, console.log)
-}
-function sendGroupMsg(room, group, message) {
-	$.socket.emit('comm', {
-		room: room,
-		to: group,
-		cmd: 'msg',
-		content: {msg: message}
-	}, console.log)
-}
-function sendPrivateMsg(room, playerId, message) {
-	$.socket.emit('tell', {
-		room: room,
-		to: playerId,
-		cmd: 'msg',
-		content: {msg: message}
-	}, console.log)
+	//
+	// Initialize
+	//
+	{
+		socket = io.connect('/')
+		if(room) {
+			console.log('Joining room ' + room)
+			this.send('join', {room: room}, console.log)
+		}
+	}
 }
 
-function getRoomInfo() {
-	$.socket.emit('info', {}, console.log)
-}

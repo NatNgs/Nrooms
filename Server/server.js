@@ -14,6 +14,8 @@ const ROOM_CODE_FORMAT = '[A-Z0-9-]{4,12}'
 const ROOM_CODE_REGEXP = new RegExp('^' + ROOM_CODE_FORMAT + '$')
 
 function serverStart() {
+	minifier.setDebug(!!config.debug)
+
 	io.sockets.on('connection', onConnect)
 
 	// Listing IP and ports available for connexion (LAN)
@@ -26,8 +28,8 @@ function serverStart() {
 	server.listen(config.serverPort)
 }
 
-const rooms = {} // roomId: {role1: [player1, player2, ...], role2: [player1, player2, ...], ...}
-const players = {} // clientId: {socket: <>, rooms: [roomId1, roomId2, ...]}
+const rooms = {} // roomId: {activity: <>, host: player1, roles: {role1: [player1, player2, ...], role2: [player1, player2, ...], ...}}
+const players = {} // clientId: {socket: <>, room: roomId}
 
 //
 // HTTP REQUESTS
@@ -114,15 +116,13 @@ function onConnect(socket) {
 	const connectBy = socket.handshake.headers.host
 
 	const clientId = socket.id
-	players[clientId] = {socket: socket, rooms: []}
-
+	players[clientId] = {socket: socket}
 
 	console.log('Player', clientId, 'connected from', connectBy)
 	socket.on('disconnect', () => {
 		console.log('Client', clientId, 'has been disconnected from', connectBy)
-		while(players[clientId].rooms.length) {
-			const roomId = players[clientId].rooms.pop()
-			leaveRoom(roomId, clientId)
+		if(players[clientId].room) {
+			rmPlayerFromRoom(players[clientId].room, clientId)
 		}
 		delete players[clientId]
 	})
@@ -133,16 +133,13 @@ function onConnect(socket) {
 	 */
 	socket.on('create', (params, response) => {
 		if(!params.room.match(ROOM_CODE_REGEXP)) {
-			response({status: 'ko', err: 'Invalid room Id (\'' + params.room + '\' does not respect [A-Za-z0-9_]{4,12})'})
+			response({status: 'ko', err: 'Invalid room Id (\'' + params.room + '\' does not respect '+ ROOM_CODE_FORMAT + ')'})
 		} else if(params.room in rooms) {
 			response({status: 'ko', err: 'Room \'' + params.room + '\' already exists'})
 		} else if(!(params.type in config.httpFolders)) {
 			response({status: 'ko', err: 'Type of room \'' + params.type + '\' does not exist'})
 		} else {
-			rooms[params.room] = {activity: params.type, host:[clientId], all:[], admin:[]}
-			const roles = addPlayerRoles(params.room, clientId, ['admin', 'all'])
-			roles.forEach((role) => socket.join(params.room + '/' + role))
-			io.to(params.room + '/all').emit('connected', {player: clientId, room: getRoomDescription(params.room)})
+			rooms[params.room] = {activity: params.type, host: null, roles:{all: []}}
 			response({status: 'ok'})
 		}
 	})
@@ -153,74 +150,68 @@ function onConnect(socket) {
 	socket.on('join', (params, response) => {
 		if(!(params.room in rooms)) {
 			response({status: 'ko', err: 'Room \'' + params.room + '\' does not exists'})
-		} else if(players[clientId].rooms.indexOf(params.room) >= 0) {
+		} else if(players[clientId].room) {
 			response({status: 'ko', err: 'Already joined the room'})
 		} else {
-			players[clientId].rooms.push(params.room)
-			const roles = addPlayerRoles(params.room, clientId, ['all'])
-			roles.forEach((role) => socket.join(params.room + '/' + role))
-			io.to(params.room + '/all').emit('connected', {player: clientId, room: getRoomDescription(params.room)})
+			addPlayerRoles(params.room, clientId, ['all'])
+			io.to(params.room + '/all').emit('connected', clientId, {player: clientId, room: getRoomDescription(params.room)})
 			response({status: 'ok'})
 		}
 	})
 
 	/**
-	 * room: str
+	 * no parameters
 	 */
 	socket.on('leave', (params, response) => {
-		if(!(params.room in rooms) || players[clientId].rooms.indexOf(params.room) < 0) {
-			response({status: 'ko', err: 'You are not a member of this room'})
+		if(!players[clientId].room) {
+			response({status: 'ko', err: 'You are not a member of any room'})
 		} else {
-			getPlayerRoles(params.room, clientId).forEach((role) => socket.leave(params.room + '/' + role))
-			leaveRoom(params.room, clientId)
+			rmPlayerFromRoom(players[clientId].room, clientId)
 			response({status: 'ok'})
 		}
 	})
 
 	/**
 	 * player: str
-	 * room: str
 	 * roles: [role1, role2, ...]
 	 */
 	socket.on('addRoles', (params, response) => {
-		if(!(params.room in rooms) || players[clientId].rooms.indexOf(params.room) < 0) {
-			response({status: 'ko', err: 'You are not a member of this room'})
-		} else if(rooms[params.room].host[0] !== clientId && rooms[params.room].admin.indexOf(clientId) >= 0) {
+		const roomId = players[clientId].room
+		if(!roomId) {
+			response({status: 'ko', err: 'You are not a member of any room'})
+		} else if(rooms[roomId].host !== clientId) {
 			response.status(401).send({err: 'Admin role required'})
-		} else if(!(params.player in players) || players[params.player].rooms.indexOf(params.room) < 0) {
-			response({status: 'ko', err: 'Player \'' + params.player + '\' is not in room \'' + params.room + '\''})
+		} else if(!(params.player in players) || players[params.player].room !== roomId) {
+			response({status: 'ko', err: 'Player \'' + params.player + '\' is not in room \'' + roomId + '\''})
 		} else {
-			const newRoles = addPlayerRoles(params.room, params.player, params.roles)
-			newRoles.forEach((role) => players[params.player].socket.join(params.room + '/' + role))
-			io.to(params.room + '/all').emit('connected', {player: clientId, room: getRoomDescription(params.room)})
+			addPlayerRoles(roomId, params.player, params.roles)
+			io.to(roomId + '/all').emit('connected', clientId, {player: params.player, room: getRoomDescription(roomId)})
 			response({status: 'ok'})
 		}
 	})
 
 	/**
 	 * player: str
-	 * room: str
 	 * roles: [role1, role2, ...]
 	 */
 	socket.on('rmRoles', (params, response) => {
-		if(!(params.room in rooms) || players[clientId].rooms.indexOf(params.room) < 0) {
-			response({status: 'ko', err: 'You are not a member of this room'})
-		} else if(rooms[params.room].host[0] !== clientId && rooms[params.room].admin.indexOf(clientId) >= 0) {
+		const roomId = players[clientId].room
+		if(!roomId) {
+			response({status: 'ko', err: 'You are not a member of any room'})
+		} else if(rooms[roomId].host !== clientId) {
 			response.status(401).send({err: 'Admin role required'})
-		} else if(!(params.player in players) || players[params.player].rooms.indexOf(params.room) < 0) {
-			response({status: 'ko', err: 'Player \'' + params.player + '\' is not in room \'' + params.room + '\''})
+		} else if(!(params.player in players) || players[params.player].room !== roomId) {
+			response({status: 'ko', err: 'Player \'' + params.player + '\' is not in room \'' + roomId + '\''})
+		} else if('host' in params.roles || 'all' in params.roles) {
+			response({status: 'ko', err: 'Cannot remove host and all rôles'})
 		} else {
-			const pSocket = players[params.player].socket
-			getPlayerRoles(params.room, params.player).forEach((role) => pSocket.leave(params.room + '/' + role))
-			const newRoles = rmPlayerRoles(params.room, params.player, params.roles)
-			newRoles.forEach((role) => pSocket.join(params.room + '/' + role))
-			io.to(params.room + '/all').emit('connected', {player: clientId, room: getRoomDescription(params.room)})
+			rmPlayerRoles(roomId, params.player, params.roles)
+			io.to(roomId + '/all').emit('connected', clientId, {player: params.player, room: getRoomDescription(roomId)})
 			response({status: 'ok'})
 		}
 	})
 
 	/**
-	 * room: str
 	 * to: str (playerId)
 	 * cmd: str (command code)
 	 * content: <any>
@@ -228,18 +219,18 @@ function onConnect(socket) {
 	 * Will send to specified user, command id "private/<cmd>" with given content
 	 */
 	socket.on('tell', (params, response) => {
-		if(!(params.room in rooms) || players[clientId].rooms.indexOf(params.room) < 0) {
-			response({status: 'ko', err: 'You are not a member of this room'})
-		} else if(!(params.to in players) || players[params.to].rooms.indexOf(params.room) < 0) {
-			response({status: 'ko', err: 'Cannot find player \'' + params.to + '\' in room \'' + params.room + '\''})
+		const roomId = players[clientId].room
+		if(!roomId) {
+			response({status: 'ko', err: 'You are not a member of any room'})
+		} else if(!(params.to in players) || players[params.to].room !== roomId) {
+			response({status: 'ko', err: 'Cannot find player \'' + params.to + '\' in room \'' + roomId + '\''})
 		} else {
-			players[params.to].socket.emit('private/' + params.cmd, params.content)
+			players[params.to].socket.emit('private/' + params.cmd, clientId, params.content)
 			response({status: 'ok'})
 		}
 	})
 
 	/**
-	 * room: str
 	 * to: str (role)
 	 * cmd: str (command code)
 	 * content: <any>
@@ -247,12 +238,13 @@ function onConnect(socket) {
 	 * Will send to all users having the 'to' role in the room, command id "<to>/<cmd>" with given content
 	 */
 	socket.on('comm', (params, response) => {
-		if(!(params.room in rooms) || players[clientId].rooms.indexOf(params.room) < 0) {
-			response({status: 'ko', err: 'You are not a member of room \'' + params.room + '\''})
-		} else if(!(params.to in rooms[params.room])) {
+		const roomId = players[clientId].room
+		if(!roomId) {
+			response({status: 'ko', err: 'You are not a member of any room'})
+		} else if(!(params.to === 'host' || params.to === 'all' || params.to in rooms[roomId].roles)) {
 			response({status: 'ko', err: 'Role \'' + params.to + '\' does not exists'})
 		} else {
-			io.to(params.room + '/' + params.to).emit(params.to + '/' + params.cmd, params.content)
+			io.to(roomId + '/' + params.to).emit(params.to + '/' + params.cmd, clientId, params.content)
 			response({status: 'ok'})
 		}
 	})
@@ -266,7 +258,7 @@ function onConnect(socket) {
 		if(!params.room || !ROOM_CODE_REGEXP.test(params.room)) {
 			response({status: 'ko', err: 'Wrong room id \'' + params.room + '\''})
 		} else if(params.room in rooms) {
-			response({status: 'ok', room: rooms[params.room]})
+			response({status: 'ok', room: getRoomDescription(params.room)})
 		} else {
 			response({status: 'ok', room: null})
 		}
@@ -276,62 +268,95 @@ function onConnect(socket) {
 // ///////////////////
 // // Functions // //
 
-function leaveRoom(roomId, clientId) {
-	rmPlayerRoles(roomId, clientId, getPlayerRoles(roomId, clientId))
-	io.to(roomId + '/all').emit('disconnected', {room: roomId, disconnected: clientId})
-	const roomRoles = rooms[roomId]
-
-	if(roomRoles.all.length <= 0) { // No more user
-		// delete rooms[roomId]
-	} else if(roomRoles.host.length <= 0) { // No more host
-		let newHost = roomRoles.all[0]
-		if(roomRoles.admin.length) {
-			newHost = roomRoles.admin[0]
-		} else {
-			roomRoles.host.push(newHost)
-			players[newHost].socket.join(roomId + '/host')
-			io.to(roomId + '/all').emit({room: roomId, connected: newHost, roles: getPlayerRoles(roomId, newHost)})
-		}
-	}
-}
-
 function getPlayerRoles(roomId, clientId) {
-	return Object.entries(rooms[roomId]).filter((kv) => kv[1].indexOf(clientId) >= 0).map((kv) => kv[0])
+	if(players[clientId].room !== roomId) {
+		return []
+	}
+
+	const room = rooms[roomId]
+	const roles = Object.entries(room.roles).filter((kv) => kv[1].indexOf(clientId) >= 0).map((kv) => kv[0])
+	roles.unshift('all')
+	if(room.host === clientId) roles.unshift('host')
+	return roles
 }
+
 function addPlayerRoles(roomId, clientId, addRoles) {
-	const roles = rooms[roomId]
+	const room = rooms[roomId]
+	const roles = room.roles
+	const player = players[clientId]
 	for(const r of addRoles) {
-		if(r === 'host') continue // "host" role can only be modified by explicitelly modifying this.roles.host
-		if(!(r in roles)) {
+		if(r === 'all') {
+			player.room = roomId
+			player.socket.join(roomId + '/all')
+		} else if(r === 'host') {
+			if(room.host) rmPlayerRoles(roomId, room.host, ['host'])
+			room.host = clientId
+			player.socket.join(roomId + '/host')
+		} else if(!(r in roles)) {
 			roles[r] = [clientId]
+			player.socket.join(roomId + '/' + r)
 		} else if(roles[r].indexOf(clientId) < 0) {
 			roles[r].push(clientId)
+			player.socket.join(roomId + '/' + r)
 		}
 	}
 	return getPlayerRoles(roomId, clientId)
 }
 function rmPlayerRoles(roomId, clientId, rmRoles) {
-	const roles = rooms[roomId]
+	const room = rooms[roomId]
+	const roles = room.roles
+	const player = players[clientId]
 	for(const r of rmRoles) {
-		if(r !== 'host' // "host" role can only be modified by explicitelly modifying this.roles.host
-				&& r !== 'all' // can only be removed by leaving the room
-				&& r in roles && roles[r].indexOf(clientId) >= 0) {
+		if(r === 'all') {
+			delete player.room
+			player.socket.leave(roomId + '/all')
+		} else if(r === 'host' && room.host === clientId) {
+			room.host = null
+			player.socket.leave(roomId + '/host')
+		} else if(r in roles && roles[r].indexOf(clientId) >= 0) {
 			const index = roles[r].indexOf(clientId)
 			const moved = roles[r].pop()
 			if(index < roles[r].length) {
 				roles[r][index] = moved
-			} else if(roles[r].length <= 0 && r !== 'admin') {
+			} else if(roles[r].length <= 0) {
 				delete roles[r]
 			}
+			player.socket.leave(roomId + '/' + r)
 		}
 	}
 	return getPlayerRoles(roomId, clientId)
+}
+function rmPlayerFromRoom(roomId, clientId) {
+	const roles = getPlayerRoles(roomId, clientId)
+	rmPlayerRoles(roomId, clientId, roles)
+	delete players[clientId].room
+
+	io.to(roomId + '/all').emit('disconnected', null, {player: clientId, room: getRoomDescription(roomId)})
+}
+function getRoomHost(roomId) {
+	const room = rooms[roomId]
+	if(!room.host) {
+		for(const p in players) {
+			if(players[p].room === roomId) {
+				addPlayerRoles(roomId, p, ['host'])
+				return p
+			}
+		}
+	}
+
+	return room.host
 }
 
 function getRoomDescription(roomId) {
 	const desc = {
 		room: roomId,
-		players: rooms[roomId]
+		host: getRoomHost(roomId),
+		players: {},
+	}
+	for(const p in players) {
+		if(players[p].room === roomId) {
+			desc.players[p] = getPlayerRoles(roomId, p)
+		}
 	}
 	return desc
 }

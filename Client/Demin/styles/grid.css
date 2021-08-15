@@ -1,0 +1,16 @@
+.dmCell {
+	min-width: 1em;
+	min-height: 1em;
+	margin: 2px;
+	background-color: grey;
+	text-align: center;
+	cursor: pointer;
+}
+
+.dmCell:not(.discovered):hover {
+	background-color: white;
+}
+.discovered {
+	background-color: limegreen;
+	cursor: default;
+}

@@ -1,0 +1,36 @@
+.slidercontainer {
+	min-width: 10em;
+	display: inline-block;
+}
+
+.slider {
+	-webkit-appearance: none;  /* Override default CSS styles */
+	appearance: none;
+	width: 100%; /* Full-width */
+	height: 0.5em; /* Specified height */
+	background: #ccc; /* Grey background */
+	outline: none; /* Remove outline */
+	opacity: 0.7; /* Set transparency (for mouse-over effects on hover) */
+	-webkit-transition: .2s; /* 0.2 seconds transition on hover */
+	transition: opacity .2s;
+}
+
+.slider:hover {
+	opacity: 1; /* Fully shown on mouse-over */
+}
+
+.slider::-webkit-slider-thumb {
+	-webkit-appearance: none; /* Override default look */
+	appearance: none;
+	width: 1em; /* Set a specific slider handle width */
+	height: 1em; /* Slider handle height */
+	background: #15a; /* Green background */
+	cursor: pointer; /* Cursor on hover */
+}
+
+.slider::-moz-range-thumb {
+	width: 1em; /* Set a specific slider handle width */
+	height: 1em; /* Slider handle height */
+	background: #15a; /* Green background */
+	cursor: pointer; /* Cursor on hover */
+}
